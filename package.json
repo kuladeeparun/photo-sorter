@@ -1,14 +1,32 @@
 {
-  "name": "wedding-photo-sorter",
+  "name": "photo-sorter",
   "version": "1.0.0",
-  "description": "A simple app to sort wedding photos",
+  "description": "A desktop application to help sort wedding photos using keyboard shortcuts",
   "main": "photo-sorter.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder",
+    "pack": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.yourdomain.photo-sorter",
+    "mac": {
+      "category": "public.app-category.photography"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "files": [
+      "*.js",
+      "*.html",
+      "*.json",
+      "!node_modules/**/*"
+    ]
   },
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "electron": "^28.0.0"
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
   }
 }
