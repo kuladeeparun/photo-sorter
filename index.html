@@ -35,6 +35,19 @@
     .stats {
       font-size: 14px;
       color: #666;
+      display: flex;
+      gap: 20px;
+    }
+    
+    .stat-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .stat-value {
+      font-weight: bold;
+      color: #333;
     }
     
     .setup-container {
@@ -210,12 +223,50 @@
     .category-label.maybe {
       background-color: rgba(255, 159, 10, 0.9);
     }
+    
+    .duplicate-warning {
+      background-color: #fff3cd;
+      color: #856404;
+      padding: 10px 15px;
+      border-radius: 4px;
+      margin-top: 10px;
+      display: none;
+    }
+    
+    .duplicate-warning.visible {
+      display: block;
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="title">Wedding Photo Sorter</div>
-    <div class="stats" id="stats"></div>
+    <div class="stats" id="stats">
+      <div class="stat-group">
+        <span>Total Photos</span>
+        <span class="stat-value" id="total-photos">0</span>
+      </div>
+      <div class="stat-group">
+        <span>Sorted</span>
+        <span class="stat-value" id="sorted-photos">0</span>
+      </div>
+      <div class="stat-group">
+        <span>Remaining</span>
+        <span class="stat-value" id="remaining-photos">0</span>
+      </div>
+      <div class="stat-group">
+        <span>Yes</span>
+        <span class="stat-value" id="yes-count">0</span>
+      </div>
+      <div class="stat-group">
+        <span>No</span>
+        <span class="stat-value" id="no-count">0</span>
+      </div>
+      <div class="stat-group">
+        <span>Maybe</span>
+        <span class="stat-value" id="maybe-count">0</span>
+      </div>
+    </div>
   </div>
   
   <div id="setup-container" class="setup-container">
@@ -262,6 +313,10 @@
   <div id="no-badge" class="category-badge no-badge">NO</div>
   <div id="maybe-badge" class="category-badge maybe-badge">MAYBE</div>
   
+  <div id="duplicate-warning" class="duplicate-warning">
+    ⚠️ Duplicate photos detected! Check the console for details.
+  </div>
+  
   <script>
     const { ipcRenderer } = require('electron');
     
@@ -295,13 +350,19 @@
         photoContainer.classList.remove('hidden');
         controls.classList.remove('hidden');
         
-        // Load the first photo
-        const photoData = await ipcRenderer.invoke('get-next-photo');
-        if (photoData) {
-          loadPhoto(photoData);
-        }
+        // Load the first photo with stats
+        const photoData = {
+          photo: result.firstPhoto,
+          index: result.currentIndex || 0,  // Fixed: use currentIndex from result
+          total: result.totalPhotos,
+          stats: result.stats
+        };
+        loadPhoto(photoData);
       }
     });
+    
+    // Track if we're currently processing a categorization
+    let isProcessing = false;
     
     // Keyboard event listener
     document.addEventListener('keydown', async (event) => {
@@ -310,8 +371,14 @@
         return;
       }
       
+      // Prevent rapid-fire categorization
+      if (isProcessing && ['ArrowUp', 'ArrowDown', ' '].includes(event.key)) {
+        return;
+      }
+      
       switch (event.key) {
         case 'ArrowLeft':
+          event.preventDefault();
           const prevData = await ipcRenderer.invoke('get-prev-photo');
           if (prevData) {
             loadPhoto(prevData);
@@ -319,6 +386,7 @@
           break;
           
         case 'ArrowRight':
+          event.preventDefault();
           const nextData = await ipcRenderer.invoke('get-next-photo');
           if (nextData) {
             loadPhoto(nextData);
@@ -326,21 +394,42 @@
           break;
           
         case 'ArrowUp':
+          event.preventDefault();
+          isProcessing = true;
           await categorizePhoto('yes');
+          isProcessing = false;
           break;
           
         case 'ArrowDown':
+          event.preventDefault();
+          isProcessing = true;
           await categorizePhoto('no');
+          isProcessing = false;
           break;
           
         case ' ': // Space key
+          event.preventDefault();  // Prevent page scroll
+          isProcessing = true;
           await categorizePhoto('maybe');
+          isProcessing = false;
           break;
       }
     });
     
     // Helper function to load a photo
     function loadPhoto(photoData) {
+      // Check if photo exists
+      if (!photoData || !photoData.photo) {
+        console.error('No photo data provided');
+        return;
+      }
+      
+      // Handle image loading errors
+      photoView.onerror = () => {
+        console.error('Failed to load image:', photoData.photo);
+        photoView.alt = 'Failed to load image';
+      };
+      
       photoView.src = `file://${photoData.photo}`;
       stats.textContent = `Photo ${photoData.index + 1} of ${photoData.total}`;
       
@@ -352,38 +441,66 @@
       } else {
         categoryLabel.className = 'category-label';
       }
+
+      // Update stats
+      if (photoData.stats) {
+        document.getElementById('total-photos').textContent = photoData.stats.total || 0;
+        document.getElementById('sorted-photos').textContent = photoData.stats.categorizedTotal || 0;
+        document.getElementById('remaining-photos').textContent = photoData.stats.remaining || 0;
+        document.getElementById('yes-count').textContent = photoData.stats.categorized?.yes || 0;
+        document.getElementById('no-count').textContent = photoData.stats.categorized?.no || 0;
+        document.getElementById('maybe-count').textContent = photoData.stats.categorized?.maybe || 0;
+
+        // Show duplicate warning if any duplicates found
+        const duplicateWarning = document.getElementById('duplicate-warning');
+        if (photoData.stats.duplicates && photoData.stats.duplicates.length > 0) {
+          duplicateWarning.classList.add('visible');
+          console.log('Duplicate photos found:', photoData.stats.duplicates);
+        } else {
+          duplicateWarning.classList.remove('visible');
+        }
+      }
     }
     
     // Helper function to categorize a photo
     async function categorizePhoto(category) {
-      // Show appropriate badge
-      let badge;
-      switch (category) {
-        case 'yes':
-          badge = yesBadge;
-          break;
-        case 'no':
-          badge = noBadge;
-          break;
-        case 'maybe':
-          badge = maybeBadge;
-          break;
-      }
-      
-      // Animate badge
-      badge.classList.add('fade-in');
-      setTimeout(() => {
-        badge.classList.remove('fade-in');
-        badge.classList.add('fade-out');
+      try {
+        // Show appropriate badge
+        let badge;
+        switch (category) {
+          case 'yes':
+            badge = yesBadge;
+            break;
+          case 'no':
+            badge = noBadge;
+            break;
+          case 'maybe':
+            badge = maybeBadge;
+            break;
+          default:
+            console.error('Invalid category:', category);
+            return;
+        }
+        
+        // Animate badge
+        badge.classList.add('fade-in');
         setTimeout(() => {
-          badge.classList.remove('fade-out');
+          badge.classList.remove('fade-in');
+          badge.classList.add('fade-out');
+          setTimeout(() => {
+            badge.classList.remove('fade-out');
+          }, 300);
         }, 300);
-      }, 300);
-      
-      // Send category to main process
-      const result = await ipcRenderer.invoke('categorize-photo', category);
-      if (result) {
-        loadPhoto(result);
+        
+        // Send category to main process
+        const result = await ipcRenderer.invoke('categorize-photo', category);
+        if (result) {
+          loadPhoto(result);
+        } else {
+          console.error('Failed to categorize photo');
+        }
+      } catch (error) {
+        console.error('Error categorizing photo:', error);
       }
     }
   </script>
