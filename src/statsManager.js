@@ -13,7 +13,10 @@ class StatsManager {
         maybe: 0
       },
       duplicates: [],
-      lastUpdated: null
+      lastUpdated: null,
+      // Tag-based statistics (for new tagging workflow)
+      tags: {},
+      untagged: 0
     };
     this.photoHashes = new Map(); // Store hashes of photos to detect duplicates
     this.categorizationMap = new Map(); // Track which photos are in which category
@@ -140,7 +143,11 @@ class StatsManager {
   // Save stats to file
   saveStats() {
     try {
-      const statsPath = path.join(this.sourceFolder, 'photo_sorter_stats.json');
+      const statsDir = path.join(this.sourceFolder, '.photo-sorter');
+      if (!fs.existsSync(statsDir)) {
+        try { fs.mkdirSync(statsDir, { recursive: true }); } catch (_e) { /* ignore */ }
+      }
+      const statsPath = path.join(statsDir, 'photo_sorter_stats.json');
       const tempPath = statsPath + '.tmp';
       fs.writeFileSync(tempPath, JSON.stringify(this.stats, null, 2));
       fs.renameSync(tempPath, statsPath);
@@ -152,7 +159,8 @@ class StatsManager {
   // Load stats from file
   loadStats() {
     try {
-      const statsPath = path.join(this.sourceFolder, 'photo_sorter_stats.json');
+      const statsDir = path.join(this.sourceFolder, '.photo-sorter');
+      const statsPath = path.join(statsDir, 'photo_sorter_stats.json');
       if (fs.existsSync(statsPath)) {
         try {
           this.stats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
@@ -166,6 +174,41 @@ class StatsManager {
       console.error('Error accessing stats file:', error);
     }
     return false;
+  }
+
+  // New: compute tag-based statistics from project data
+  updateFromProject(allPhotos = [], project = null) {
+    try {
+      const fileNames = (allPhotos || []).map(p => require('path').basename(p));
+      const tagCounts = {};
+      let untagged = 0;
+
+      if (project && project.images && typeof project.images === 'object') {
+        for (const fileName of fileNames) {
+          const entry = project.images[fileName];
+          const tags = Array.isArray(entry?.tags) ? entry.tags : [];
+          if (tags.length === 0) {
+            untagged += 1;
+          } else {
+            for (const t of tags) {
+              const key = String(t);
+              tagCounts[key] = (tagCounts[key] || 0) + 1;
+            }
+          }
+        }
+      } else {
+        // If no project yet, everything is untagged
+        untagged = fileNames.length;
+      }
+
+      this.stats.total = fileNames.length;
+      this.stats.tags = tagCounts;
+      this.stats.untagged = untagged;
+      this.stats.lastUpdated = new Date().toISOString();
+      this.saveStats();
+    } catch (error) {
+      console.error('Error updating tag stats:', error);
+    }
   }
 }
 

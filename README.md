@@ -1,13 +1,15 @@
-# Wedding Photo Sorter
+# Photo Sorter (Tag → Review → Export)
 
-A desktop application built with Electron to help you quickly sort through wedding photos using keyboard shortcuts.
+A desktop application built with Electron to help you tag photos quickly (arrow-key navigation, keyboard-first tagging), review progress, and then export destructively into per-tag folders.
 
 ## Features
 
-- Quick photo sorting with keyboard shortcuts
-- Categories: Yes (↑), No (↓), Maybe (Space)
-- Automatic organization into subfolders
-- Progress tracking and session resumption
+- Fast navigation with arrow keys (prev/next)
+- Multi-tag per photo with autocomplete and quick-apply (number keys 1–9)
+- JSON-only during curation (no files moved until export)
+- Review mode with total, per-tag, and untagged counts
+- Destructive export: move originals into primary tag folders; hardlink/copy for secondary tags
+- EXIF-first sort (DateTimeOriginal → mtime → name)
 - Support for common image formats (jpg, jpeg, png, gif, bmp, tiff, webp)
 
 ## Prerequisites
@@ -99,24 +101,15 @@ npm run build
 ## Usage
 
 1. Launch the application
-2. Select the folder containing your wedding photos
-3. Use the following keyboard shortcuts to sort photos:
-   - ↑ (Up Arrow): Mark as "Yes"
-   - ↓ (Down Arrow): Mark as "No"
-   - Space: Mark as "Maybe"
-   - ← (Left Arrow): Previous photo
-   - → (Right Arrow): Next photo
+2. Select a folder as the project root (only top-level photos are included; subfolders are ignored)
+3. Navigate with ←/→; add tags in the input (Enter) or press 1–9 for quick tags
+4. Open Review to see total, per-tag, and untagged counts
+5. Click Export → review the dry-run summary → confirm
 
-The sorted photos will be organized in a `sorted` subfolder with the following structure:
-
-```
-your-photos-folder/
-├── sorted/
-│   ├── yes/
-│   ├── no/
-│   └── maybe/
-└── [original photos]
-```
+Export behavior:
+- Each photo’s first tag is the primary tag. The original is MOVED into `<root>/<primaryTag>/`.
+- For additional tags, hardlinks are created into their folders (copy fallback when hardlinks are unavailable).
+- Untagged photos remain in place (optionally handle them later).
 
 ## Development Scripts
 

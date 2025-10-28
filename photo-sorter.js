@@ -5,6 +5,15 @@ const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const StatsManager = require('./src/statsManager');
+const ProjectManager = require('./src/projectManager');
+let exifr = null;
+try {
+  // Optional dependency for EXIF reading; app will fall back if unavailable
+  // eslint-disable-next-line global-require, import/no-extraneous-dependencies
+  exifr = require('exifr');
+} catch (_e) {
+  exifr = null;
+}
 
 // Initialize the app
 app.whenReady().then(() => {
@@ -30,14 +39,17 @@ let currentPhotoIndex = 0;
 let sourceFolder = '';
 let categorizationHistory = new Map(); // Track photo categorization history
 let statsManager = null;
+let projectManager = null;
 
-// Metadata file name
+// Metadata file name and project dir
 const METADATA_FILE = 'photo_sorter_metadata.json';
+const PROJECT_DIRNAME = '.photo-sorter';
 
 // Load metadata from file
 function loadMetadata() {
   try {
-    const metadataPath = path.join(sourceFolder, METADATA_FILE);
+    const metadataDir = path.join(sourceFolder, PROJECT_DIRNAME);
+    const metadataPath = path.join(metadataDir, METADATA_FILE);
     if (fs.existsSync(metadataPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
@@ -70,7 +82,11 @@ function loadMetadata() {
 // Save metadata to file
 function saveMetadata() {
   try {
-    const metadataPath = path.join(sourceFolder, METADATA_FILE);
+    const metadataDir = path.join(sourceFolder, PROJECT_DIRNAME);
+    if (!fs.existsSync(metadataDir)) {
+      try { fs.mkdirSync(metadataDir, { recursive: true }); } catch (_e) {}
+    }
+    const metadataPath = path.join(metadataDir, METADATA_FILE);
     const data = {
       currentIndex: currentPhotoIndex,
       // Convert Map to array of [key, value] pairs for JSON serialization
@@ -119,32 +135,21 @@ ipcMain.handle('select-source-folder', async () => {
       
       // Read all image files from the directory
       try {
-        photos = getImageFiles(sourceFolder);
+        const scanned = getImageFiles(sourceFolder);
+        photos = await orderPhotos(scanned);
       } catch (error) {
         console.error('Error reading photos:', error);
         dialog.showErrorBox('Error', 'Failed to read photos from the selected folder.');
         return null;
       }
       
-      // Create sorted subdirectory and category folders
+      // Initialize project manager and ensure project file exists (JSON-only during curation)
       try {
-        const sortedFolder = path.join(sourceFolder, 'sorted');
-        if (!fs.existsSync(sortedFolder)) {
-          fs.mkdirSync(sortedFolder);
-        }
-        
-        // Create category subfolders
-        const categories = ['yes', 'no', 'maybe'];
-        categories.forEach(category => {
-          const categoryFolder = path.join(sortedFolder, category);
-          if (!fs.existsSync(categoryFolder)) {
-            fs.mkdirSync(categoryFolder);
-          }
-        });
+        projectManager = new ProjectManager(sourceFolder);
+        await projectManager.loadOrCreate(photos);
       } catch (error) {
-        console.error('Error creating folders:', error);
-        dialog.showErrorBox('Error', 'Failed to create sorting folders. Check folder permissions.');
-        return null;
+        console.error('Error initializing project manager:', error);
+        // Continue; not fatal for browsing
       }
 
       // Initialize stats manager
@@ -154,6 +159,15 @@ ipcMain.handle('select-source-folder', async () => {
       } catch (error) {
         console.error('Error initializing stats:', error);
         // Continue anyway, stats are not critical
+      }
+
+      // After project load, update tag-based stats
+      try {
+        if (statsManager && projectManager) {
+          statsManager.updateFromProject(photos, projectManager.project);
+        }
+      } catch (_e) {
+        // Non-fatal
       }
 
       // Try to load existing metadata
@@ -339,3 +353,295 @@ function getImageFiles(directory) {
   
   return files;
 }
+
+// Order files by EXIF DateTimeOriginal, then by mtime, then by filename
+async function orderPhotos(filePaths) {
+  const withMeta = await Promise.all(
+    filePaths.map(async (file) => {
+      let exifDateMs = null;
+      if (exifr) {
+        try {
+          const data = await exifr.parse(file, { pick: ['DateTimeOriginal'] });
+          if (data && data.DateTimeOriginal instanceof Date) {
+            exifDateMs = data.DateTimeOriginal.getTime();
+          }
+        } catch (_e) {
+          // Ignore EXIF errors; fall back to mtime
+        }
+      }
+      let mtimeMs = 0;
+      try {
+        const stat = fs.statSync(file);
+        mtimeMs = stat.mtimeMs || 0;
+      } catch (_e) {
+        mtimeMs = 0;
+      }
+      return { file, exifDateMs, mtimeMs, name: path.basename(file) };
+    })
+  );
+
+  withMeta.sort((a, b) => {
+    // Prefer EXIF date
+    if (a.exifDateMs !== null && b.exifDateMs !== null && a.exifDateMs !== b.exifDateMs) {
+      return a.exifDateMs - b.exifDateMs;
+    }
+    if (a.exifDateMs !== null && b.exifDateMs === null) return -1;
+    if (a.exifDateMs === null && b.exifDateMs !== null) return 1;
+
+    // Fallback to mtime
+    if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
+
+    // Finally by name
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  return withMeta.map(x => x.file);
+}
+
+// Tagging IPC handlers
+ipcMain.handle('get-photo-tags', (_event, filePathArg) => {
+  try {
+    if (!projectManager || !filePathArg) return [];
+    const fileName = path.basename(filePathArg);
+    return projectManager.getTags(fileName);
+  } catch (_e) {
+    return [];
+  }
+});
+
+ipcMain.handle('get-all-tags', () => {
+  try {
+    if (!projectManager) return [];
+    return projectManager.getAllTags();
+  } catch (_e) {
+    return [];
+  }
+});
+
+// Stats IPC
+ipcMain.handle('get-stats', () => {
+  try {
+    return statsManager ? statsManager.getStats() : null;
+  } catch (_e) {
+    return null;
+  }
+});
+
+// Export helpers and IPC
+function safeTagToFolder(tag) {
+  let s = String(tag || '').trim();
+  // Replace invalid Windows characters and normalize whitespace
+  s = s.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim();
+  // Strip trailing dots/spaces
+  s = s.replace(/[ .]+$/g, '');
+  // Reserved names
+  const reserved = new Set(['CON','PRN','AUX','NUL','COM1','COM2','COM3','COM4','COM5','COM6','COM7','COM8','COM9','LPT1','LPT2','LPT3','LPT4','LPT5','LPT6','LPT7','LPT8','LPT9']);
+  if (reserved.has(s.toUpperCase())) s = `_${s}`;
+  if (s.length === 0) s = 'tag';
+  if (s.length > 100) s = s.slice(0, 100);
+  return s;
+}
+
+function ensureDirSync(dirPath) {
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function moveWithFallbackSync(src, dest) {
+  try {
+    fs.renameSync(src, dest);
+  } catch (e) {
+    if (e && e.code === 'EXDEV') {
+      fs.copyFileSync(src, dest);
+      try { fs.unlinkSync(src); } catch (_e) { /* ignore */ }
+    } else {
+      throw e;
+    }
+  }
+}
+
+function linkOrCopySync(src, dest) {
+  try {
+    fs.linkSync(src, dest);
+  } catch (_e) {
+    fs.copyFileSync(src, dest);
+  }
+}
+
+function uniquePath(targetPath) {
+  if (!fs.existsSync(targetPath)) return targetPath;
+  const dir = path.dirname(targetPath);
+  const ext = path.extname(targetPath);
+  const base = path.basename(targetPath, ext);
+  let i = 1;
+  let p = targetPath;
+  while (fs.existsSync(p)) {
+    p = path.join(dir, `${base}_${i}${ext}`);
+    i++;
+  }
+  return p;
+}
+
+function buildExportPlan(exportRoot) {
+  const plan = { total: 0, tagged: 0, untagged: 0, perTag: {}, moves: [], links: [] };
+  if (!projectManager || !projectManager.project) return plan;
+  const project = projectManager.project;
+  const fileNames = photos.map(p => path.basename(p));
+  plan.total = fileNames.length;
+  for (const fileName of fileNames) {
+    const entry = project.images[fileName];
+    const tags = Array.isArray(entry?.tags) ? entry.tags : [];
+    if (tags.length === 0) {
+      plan.untagged++;
+      continue;
+    }
+    plan.tagged++;
+    const primary = tags[0];
+    const primaryFolder = path.join(exportRoot, safeTagToFolder(primary));
+    ensureDirSync(primaryFolder);
+    const srcAbs = path.join(sourceFolder, fileName);
+    const destPrimary = uniquePath(path.join(primaryFolder, fileName));
+    plan.moves.push({ src: srcAbs, dest: destPrimary });
+    for (let i = 1; i < tags.length; i++) {
+      const folder = path.join(exportRoot, safeTagToFolder(tags[i]));
+      ensureDirSync(folder);
+      const dest = uniquePath(path.join(folder, fileName));
+      plan.links.push({ src: destPrimary, dest });
+    }
+    for (const t of tags) {
+      plan.perTag[t] = (plan.perTag[t] || 0) + 1;
+    }
+  }
+  return plan;
+}
+
+ipcMain.handle('export-dry-run', (_event, exportRootArg) => {
+  try {
+    const exportRoot = exportRootArg && typeof exportRootArg === 'string' ? exportRootArg : sourceFolder;
+    ensureDirSync(exportRoot);
+    const plan = buildExportPlan(exportRoot);
+    return plan;
+  } catch (e) {
+    console.error('Dry run failed', e);
+    return null;
+  }
+});
+
+ipcMain.handle('export-execute', (_event, exportRootArg) => {
+  try {
+    const exportRoot = exportRootArg && typeof exportRootArg === 'string' ? exportRootArg : sourceFolder;
+    const plan = buildExportPlan(exportRoot);
+    // Execute moves first
+    for (const m of plan.moves) {
+      ensureDirSync(path.dirname(m.dest));
+      moveWithFallbackSync(m.src, m.dest);
+    }
+    // Then create hardlinks/copies for secondary tags
+    for (const l of plan.links) {
+      ensureDirSync(path.dirname(l.dest));
+      linkOrCopySync(l.src, l.dest);
+    }
+    return { ok: true, moved: plan.moves.length, linked: plan.links.length };
+  } catch (e) {
+    console.error('Export failed', e);
+    dialog.showErrorBox('Export Error', String(e.message || e));
+    return { ok: false, error: String(e.message || e) };
+  }
+});
+
+// Revert export (debug): move back files to root, delete tag folders, delete JSON files
+function tryUnlink(p) {
+  try { fs.unlinkSync(p); } catch (_e) { /* ignore */ }
+}
+
+function tryRmDirRecursive(p) {
+  try { fs.rmSync(p, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
+}
+
+ipcMain.handle('revert-export', () => {
+  try {
+    // Ensure we have a project; if not, try reading from disk
+    if (!projectManager) {
+      projectManager = new ProjectManager(sourceFolder || process.cwd());
+      try { projectManager.loadOrCreate([]); } catch (_e) {}
+    }
+    const project = projectManager ? projectManager.project : null;
+    const tagSet = new Set();
+    let restored = 0;
+    let removed = 0;
+
+    if (project && project.images) {
+      for (const [fileName, entry] of Object.entries(project.images)) {
+        const tags = Array.isArray(entry?.tags) ? entry.tags : [];
+        if (tags.length === 0) continue;
+        const primary = tags[0];
+        tagSet.add(primary);
+        const primaryPath = path.join(sourceFolder, safeTagToFolder(primary), fileName);
+        if (fs.existsSync(primaryPath)) {
+          const dest = uniquePath(path.join(sourceFolder, fileName));
+          moveWithFallbackSync(primaryPath, dest);
+          restored++;
+        }
+        for (let i = 1; i < tags.length; i++) {
+          const t = tags[i];
+          tagSet.add(t);
+          const p = path.join(sourceFolder, safeTagToFolder(t), fileName);
+          if (fs.existsSync(p)) {
+            tryUnlink(p);
+            removed++;
+          }
+        }
+      }
+    }
+
+    // Remove tag directories (only those that match known tags)
+    for (const t of (project?.tags || [])) {
+      const dir = path.join(sourceFolder, safeTagToFolder(t));
+      tryRmDirRecursive(dir);
+    }
+
+    // Delete JSON files
+    const projectDir = path.join(sourceFolder, PROJECT_DIRNAME);
+    tryUnlink(path.join(projectDir, 'project.json'));
+    tryUnlink(path.join(projectDir, 'photo_sorter_stats.json'));
+    tryUnlink(path.join(projectDir, 'photo_sorter_metadata.json'));
+    tryRmDirRecursive(projectDir);
+    // Legacy cleanup (old root-level files)
+    tryUnlink(path.join(sourceFolder, 'photo_sorter_stats.json'));
+    tryUnlink(path.join(sourceFolder, 'photo_sorter_metadata.json'));
+
+    return { ok: true, restored, removed };
+  } catch (e) {
+    console.error('Revert failed', e);
+    return { ok: false, error: String(e.message || e) };
+  }
+});
+
+ipcMain.handle('add-photo-tag', (_event, payload) => {
+  try {
+    if (!projectManager || !payload || !payload.filePath || !payload.tag) return [];
+    const fileName = path.basename(payload.filePath);
+    projectManager.addTag(fileName, payload.tag);
+    projectManager.save();
+    if (statsManager) {
+      statsManager.updateFromProject(photos, projectManager.project);
+    }
+    return projectManager.getTags(fileName);
+  } catch (_e) {
+    return [];
+  }
+});
+
+ipcMain.handle('remove-photo-tag', (_event, payload) => {
+  try {
+    if (!projectManager || !payload || !payload.filePath || !payload.tag) return [];
+    const fileName = path.basename(payload.filePath);
+    projectManager.removeTag(fileName, payload.tag);
+    projectManager.save();
+    if (statsManager) {
+      statsManager.updateFromProject(photos, projectManager.project);
+    }
+    return projectManager.getTags(fileName);
+  } catch (_e) {
+    return [];
+  }
+});

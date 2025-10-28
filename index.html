@@ -267,6 +267,11 @@
         <span class="stat-value" id="maybe-count">0</span>
       </div>
     </div>
+    <div>
+      <button id="toggle-review">Review</button>
+      <button id="export-btn" style="margin-left: 10px; background-color: #10a37f;">Export</button>
+      <button id="revert-btn" style="margin-left: 10px; background-color: #e5534b;">Revert</button>
+    </div>
   </div>
   
   <div id="setup-container" class="setup-container">
@@ -285,6 +290,11 @@
     <img id="photo-view" class="photo-view" src="" alt="Wedding photo" />
     <div id="category-label" class="category-label"></div>
   </div>
+
+  <div id="review-panel" class="hidden" style="padding: 12px 20px; background: #fff; border-bottom: 1px solid #ddd;">
+    <div id="review-summary" style="font-size: 14px; color: #333; margin-bottom: 8px;"></div>
+    <div id="review-tags" style="display: flex; gap: 12px; flex-wrap: wrap;"></div>
+  </div>
   
   <div id="controls" class="controls hidden">
     <div class="control-group">
@@ -295,23 +305,11 @@
       <span class="key">→</span>
       <span class="action">Next</span>
     </div>
-    <div class="control-group">
-      <span class="key">↑</span>
-      <span class="action">Yes</span>
-    </div>
-    <div class="control-group">
-      <span class="key">↓</span>
-      <span class="action">No</span>
-    </div>
-    <div class="control-group">
-      <span class="key">Space</span>
-      <span class="action">Maybe</span>
+    <div class="control-group" style="min-width: 320px;">
+      <input id="tag-input" type="text" placeholder="Add tag and press Enter" list="all-tags" style="padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; width: 220px;" />
+      <datalist id="all-tags"></datalist>
     </div>
   </div>
-  
-  <div id="yes-badge" class="category-badge yes-badge">YES</div>
-  <div id="no-badge" class="category-badge no-badge">NO</div>
-  <div id="maybe-badge" class="category-badge maybe-badge">MAYBE</div>
   
   <div id="duplicate-warning" class="duplicate-warning">
     ⚠️ Duplicate photos detected! Check the console for details.
@@ -328,9 +326,16 @@
     const stats = document.getElementById('stats');
     const sourcePath = document.getElementById('source-path');
     const selectSourceBtn = document.getElementById('select-source');
-    const yesBadge = document.getElementById('yes-badge');
-    const noBadge = document.getElementById('no-badge');
-    const maybeBadge = document.getElementById('maybe-badge');
+    const tagInput = document.getElementById('tag-input');
+    const tagOptions = document.getElementById('all-tags');
+    let currentPhotoPath = null;
+    let cachedAllTags = [];
+    const reviewPanel = document.getElementById('review-panel');
+    const reviewSummary = document.getElementById('review-summary');
+    const reviewTags = document.getElementById('review-tags');
+    const toggleReviewBtn = document.getElementById('toggle-review');
+    const exportBtn = document.getElementById('export-btn');
+    const revertBtn = document.getElementById('revert-btn');
     
     // Button event listeners
     selectSourceBtn.addEventListener('click', async () => {
@@ -361,18 +366,10 @@
       }
     });
     
-    // Track if we're currently processing a categorization
-    let isProcessing = false;
-    
     // Keyboard event listener
     document.addEventListener('keydown', async (event) => {
       // Only process keyboard events if we're in photo viewing mode
       if (photoContainer.classList.contains('hidden')) {
-        return;
-      }
-      
-      // Prevent rapid-fire categorization
-      if (isProcessing && ['ArrowUp', 'ArrowDown', ' '].includes(event.key)) {
         return;
       }
       
@@ -392,26 +389,17 @@
             loadPhoto(nextData);
           }
           break;
-          
-        case 'ArrowUp':
+
+        case 'Escape':
           event.preventDefault();
-          isProcessing = true;
-          await categorizePhoto('yes');
-          isProcessing = false;
-          break;
-          
-        case 'ArrowDown':
-          event.preventDefault();
-          isProcessing = true;
-          await categorizePhoto('no');
-          isProcessing = false;
-          break;
-          
-        case ' ': // Space key
-          event.preventDefault();  // Prevent page scroll
-          isProcessing = true;
-          await categorizePhoto('maybe');
-          isProcessing = false;
+          if (currentPhotoPath) {
+            try {
+              await ipcRenderer.invoke('add-photo-tag', { filePath: currentPhotoPath, tag: 'skip' });
+              refreshTagsUI();
+            } catch (err) {
+              console.error('Failed to add skip tag', err);
+            }
+          }
           break;
       }
     });
@@ -430,6 +418,7 @@
         photoView.alt = 'Failed to load image';
       };
       
+      currentPhotoPath = photoData.photo;
       photoView.src = `file://${photoData.photo}`;
       stats.textContent = `Photo ${photoData.index + 1} of ${photoData.total}`;
       
@@ -460,49 +449,208 @@
           duplicateWarning.classList.remove('visible');
         }
       }
+
+      // Load tags for the current photo and all-known tags for autocomplete
+      refreshTagsUI();
     }
     
-    // Helper function to categorize a photo
-    async function categorizePhoto(category) {
+    // Removed old categorization via arrow up/down/space
+
+    // Tagging helpers
+    async function refreshTagsUI() {
       try {
-        // Show appropriate badge
-        let badge;
-        switch (category) {
-          case 'yes':
-            badge = yesBadge;
-            break;
-          case 'no':
-            badge = noBadge;
-            break;
-          case 'maybe':
-            badge = maybeBadge;
-            break;
-          default:
-            console.error('Invalid category:', category);
-            return;
-        }
-        
-        // Animate badge
-        badge.classList.add('fade-in');
-        setTimeout(() => {
-          badge.classList.remove('fade-in');
-          badge.classList.add('fade-out');
-          setTimeout(() => {
-            badge.classList.remove('fade-out');
-          }, 300);
-        }, 300);
-        
-        // Send category to main process
-        const result = await ipcRenderer.invoke('categorize-photo', category);
-        if (result) {
-          loadPhoto(result);
-        } else {
-          console.error('Failed to categorize photo');
-        }
-      } catch (error) {
-        console.error('Error categorizing photo:', error);
+        if (!currentPhotoPath) return;
+        const [photoTags, allTags] = await Promise.all([
+          ipcRenderer.invoke('get-photo-tags', currentPhotoPath),
+          ipcRenderer.invoke('get-all-tags')
+        ]);
+
+        // Render datalist options
+        cachedAllTags = Array.isArray(allTags) ? allTags : [];
+        tagOptions.innerHTML = '';
+        cachedAllTags.forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t;
+          tagOptions.appendChild(opt);
+        });
+
+        // Render chips below the image
+        renderTagChips(photoTags || []);
+      } catch (e) {
+        // Non-fatal
+        console.error('Failed to refresh tags UI', e);
       }
     }
+
+    function renderTagChips(tags) {
+      let chips = document.getElementById('tag-chips');
+      if (!chips) {
+        chips = document.createElement('div');
+        chips.id = 'tag-chips';
+        chips.style.position = 'absolute';
+        chips.style.bottom = '20px';
+        chips.style.left = '20px';
+        chips.style.display = 'flex';
+        chips.style.flexWrap = 'wrap';
+        chips.style.gap = '8px';
+        photoContainer.appendChild(chips);
+      }
+      chips.innerHTML = '';
+      tags.forEach(tag => {
+        const chip = document.createElement('span');
+        chip.textContent = tag;
+        chip.style.padding = '6px 10px';
+        chip.style.background = '#e6f0ff';
+        chip.style.border = '1px solid #c6ddff';
+        chip.style.borderRadius = '999px';
+        chip.style.fontSize = '12px';
+        chip.style.display = 'inline-flex';
+        chip.style.alignItems = 'center';
+        chip.style.gap = '6px';
+
+        const btn = document.createElement('button');
+        btn.textContent = '×';
+        btn.style.background = '#dbe9ff';
+        btn.style.color = '#333';
+        btn.style.border = 'none';
+        btn.style.borderRadius = '50%';
+        btn.style.width = '18px';
+        btn.style.height = '18px';
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', async () => {
+          if (!currentPhotoPath) return;
+          await ipcRenderer.invoke('remove-photo-tag', { filePath: currentPhotoPath, tag });
+          refreshTagsUI();
+        });
+        chip.appendChild(btn);
+        chips.appendChild(chip);
+      });
+    }
+
+    tagInput.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        const value = tagInput.value.trim();
+        if (!value || !currentPhotoPath) return;
+        try {
+          await ipcRenderer.invoke('add-photo-tag', { filePath: currentPhotoPath, tag: value });
+          tagInput.value = '';
+          refreshTagsUI();
+        } catch (err) {
+          console.error('Failed to add tag', err);
+        }
+      } else if (e.key === 'Backspace') {
+        if (tagInput.value === '') {
+          // Remove the last tag chip if any
+          const chips = document.getElementById('tag-chips');
+          if (chips && chips.lastChild) {
+            const lastLabel = chips.lastChild.firstChild ? chips.lastChild.firstChild.textContent : chips.lastChild.textContent;
+            const tag = (lastLabel || '').trim();
+            if (tag && currentPhotoPath) {
+              try {
+                await ipcRenderer.invoke('remove-photo-tag', { filePath: currentPhotoPath, tag });
+                refreshTagsUI();
+              } catch (err) {
+                console.error('Failed to remove tag', err);
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // Quick-apply tags via number keys (1-9) when not typing in inputs
+    document.addEventListener('keydown', async (e) => {
+      const isTyping = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
+      if (isTyping && document.activeElement !== tagInput) return;
+      if (!currentPhotoPath) return;
+      const num = parseInt(e.key, 10);
+      if (!Number.isNaN(num) && num >= 1 && num <= 9) {
+        const idx = num - 1;
+        if (cachedAllTags[idx]) {
+          try {
+            await ipcRenderer.invoke('add-photo-tag', { filePath: currentPhotoPath, tag: cachedAllTags[idx] });
+            refreshTagsUI();
+          } catch (err) {
+            console.error('Failed to quick-apply tag', err);
+          }
+        }
+      }
+    });
+
+    // Review panel toggle
+    toggleReviewBtn.addEventListener('click', async () => {
+      const isHidden = reviewPanel.classList.contains('hidden');
+      if (isHidden) {
+        await renderReview();
+        reviewPanel.classList.remove('hidden');
+      } else {
+        reviewPanel.classList.add('hidden');
+      }
+    });
+
+    async function renderReview() {
+      try {
+        const s = await ipcRenderer.invoke('get-stats');
+        if (!s) return;
+        const taggedTotal = Object.values(s.tags || {}).reduce((a, b) => a + b, 0);
+        reviewSummary.textContent = `Total: ${s.total} • Tagged: ${taggedTotal} • Untagged: ${s.untagged}`;
+        reviewTags.innerHTML = '';
+        Object.entries(s.tags || {}).sort((a, b) => b[1] - a[1]).forEach(([tag, count]) => {
+          const pill = document.createElement('span');
+          pill.textContent = `${tag} (${count})`;
+          pill.style.padding = '6px 10px';
+          pill.style.background = '#f2f2f2';
+          pill.style.borderRadius = '999px';
+          pill.style.fontSize = '12px';
+          reviewTags.appendChild(pill);
+        });
+      } catch (e) {
+        console.error('Failed to render review', e);
+      }
+    }
+
+    // Export flow (dry run then confirm)
+    exportBtn.addEventListener('click', async () => {
+      try {
+        const plan = await ipcRenderer.invoke('export-dry-run');
+        if (!plan) return;
+        const tagList = Object.entries(plan.perTag || {})
+          .sort((a, b) => b[1] - a[1])
+          .map(([t, c]) => `${t}: ${c}`)
+          .join(', ');
+        const msg = `Ready to export?\n\n` +
+          `Total: ${plan.total}\nTagged: ${plan.tagged}\nUntagged: ${plan.untagged}\n` +
+          (tagList ? `\nPer-tag: ${tagList}\n` : '');
+        const ok = window.confirm(msg);
+        if (!ok) return;
+        const res = await ipcRenderer.invoke('export-execute');
+        if (res && res.ok) {
+          alert(`Export complete. Moved: ${res.moved}, Linked/Copied: ${res.linked}`);
+        } else {
+          alert(`Export failed: ${res && res.error ? res.error : 'Unknown error'}`);
+        }
+      } catch (e) {
+        console.error('Export error', e);
+        alert('Export failed. See console for details.');
+      }
+    });
+
+    // Revert flow (debug): move files back to root, delete tag dirs, delete JSON
+    revertBtn.addEventListener('click', async () => {
+      const ok = window.confirm('Revert export? This will move photos back to the root, delete tag folders, and delete project/stat/metadata JSON.');
+      if (!ok) return;
+      try {
+        const res = await ipcRenderer.invoke('revert-export');
+        if (res && res.ok) {
+          alert(`Revert complete. Restored: ${res.restored}, removed dupes: ${res.removed}`);
+        } else {
+          alert(`Revert failed: ${res && res.error ? res.error : 'Unknown error'}`);
+        }
+      } catch (e) {
+        console.error('Revert error', e);
+        alert('Revert failed. See console for details.');
+      }
+    });
   </script>
 </body>
 </html>
