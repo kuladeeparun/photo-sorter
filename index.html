@@ -493,30 +493,52 @@
         chips.style.display = 'flex';
         chips.style.flexWrap = 'wrap';
         chips.style.gap = '8px';
+        chips.style.maxWidth = 'calc(100% - 40px)';
         photoContainer.appendChild(chips);
       }
       chips.innerHTML = '';
       tags.forEach(tag => {
         const chip = document.createElement('span');
-        chip.textContent = tag;
-        chip.style.padding = '6px 10px';
-        chip.style.background = '#e6f0ff';
-        chip.style.border = '1px solid #c6ddff';
-        chip.style.borderRadius = '999px';
-        chip.style.fontSize = '12px';
+        chip.style.padding = '8px 12px';
+        chip.style.background = 'rgba(255, 255, 255, 0.95)';
+        chip.style.border = '1px solid rgba(0, 0, 0, 0.1)';
+        chip.style.borderRadius = '6px';
+        chip.style.fontSize = '13px';
+        chip.style.fontWeight = '500';
         chip.style.display = 'inline-flex';
         chip.style.alignItems = 'center';
-        chip.style.gap = '6px';
+        chip.style.gap = '8px';
+        chip.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1)';
+        chip.style.color = '#333';
+
+        const tagLabel = document.createElement('span');
+        tagLabel.textContent = tag;
+        chip.appendChild(tagLabel);
 
         const btn = document.createElement('button');
         btn.textContent = '×';
-        btn.style.background = '#dbe9ff';
-        btn.style.color = '#333';
+        btn.style.background = 'rgba(0, 0, 0, 0.05)';
+        btn.style.color = '#666';
         btn.style.border = 'none';
         btn.style.borderRadius = '50%';
-        btn.style.width = '18px';
-        btn.style.height = '18px';
+        btn.style.width = '20px';
+        btn.style.height = '20px';
         btn.style.cursor = 'pointer';
+        btn.style.display = 'flex';
+        btn.style.alignItems = 'center';
+        btn.style.justifyContent = 'center';
+        btn.style.fontSize = '16px';
+        btn.style.lineHeight = '1';
+        btn.style.padding = '0';
+        btn.style.transition = 'background 0.2s';
+        btn.onmouseenter = () => {
+          btn.style.background = 'rgba(0, 0, 0, 0.15)';
+          btn.style.color = '#333';
+        };
+        btn.onmouseleave = () => {
+          btn.style.background = 'rgba(0, 0, 0, 0.05)';
+          btn.style.color = '#666';
+        };
         btn.addEventListener('click', async () => {
           if (!currentPhotoPath) return;
           await ipcRenderer.invoke('remove-photo-tag', { filePath: currentPhotoPath, tag });
