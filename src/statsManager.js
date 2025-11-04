@@ -93,7 +93,6 @@ class StatsManager {
       }
 
       this.stats.lastUpdated = new Date().toISOString();
-      this.saveStats();
     } catch (error) {
       console.error('Error initializing stats:', error);
       // Set default values on error
@@ -125,7 +124,6 @@ class StatsManager {
       }
       
       this.stats.lastUpdated = new Date().toISOString();
-      this.saveStats();
     } catch (error) {
       console.error('Error updating stats:', error);
     }
@@ -140,43 +138,7 @@ class StatsManager {
     };
   }
 
-  // Save stats to file
-  saveStats() {
-    try {
-      const statsDir = path.join(this.sourceFolder, '.photo-sorter');
-      if (!fs.existsSync(statsDir)) {
-        try { fs.mkdirSync(statsDir, { recursive: true }); } catch (_e) { /* ignore */ }
-      }
-      const statsPath = path.join(statsDir, 'photo_sorter_stats.json');
-      const tempPath = statsPath + '.tmp';
-      fs.writeFileSync(tempPath, JSON.stringify(this.stats, null, 2));
-      fs.renameSync(tempPath, statsPath);
-    } catch (error) {
-      console.error('Error saving stats:', error);
-    }
-  }
-
-  // Load stats from file
-  loadStats() {
-    try {
-      const statsDir = path.join(this.sourceFolder, '.photo-sorter');
-      const statsPath = path.join(statsDir, 'photo_sorter_stats.json');
-      if (fs.existsSync(statsPath)) {
-        try {
-          this.stats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
-          return true;
-        } catch (error) {
-          console.error('Error loading stats:', error);
-          return false;
-        }
-      }
-    } catch (error) {
-      console.error('Error accessing stats file:', error);
-    }
-    return false;
-  }
-
-  // New: compute tag-based statistics from project data
+  // Compute tag-based statistics from project data
   updateFromProject(allPhotos = [], project = null) {
     try {
       const fileNames = (allPhotos || []).map(p => require('path').basename(p));
@@ -205,7 +167,6 @@ class StatsManager {
       this.stats.tags = tagCounts;
       this.stats.untagged = untagged;
       this.stats.lastUpdated = new Date().toISOString();
-      this.saveStats();
     } catch (error) {
       console.error('Error updating tag stats:', error);
     }

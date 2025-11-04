@@ -41,68 +41,8 @@ let categorizationHistory = new Map(); // Track photo categorization history
 let statsManager = null;
 let projectManager = null;
 
-// Metadata file name and project dir
-const METADATA_FILE = 'photo_sorter_metadata.json';
+// Project dir
 const PROJECT_DIRNAME = '.photo-sorter';
-
-// Load metadata from file
-function loadMetadata() {
-  try {
-    const metadataDir = path.join(sourceFolder, PROJECT_DIRNAME);
-    const metadataPath = path.join(metadataDir, METADATA_FILE);
-    if (fs.existsSync(metadataPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-        currentPhotoIndex = data.currentIndex || 0;
-        
-        // Validate that currentPhotoIndex is within bounds
-        if (currentPhotoIndex >= photos.length) {
-          currentPhotoIndex = 0;
-        }
-        
-        // Convert the array of [key, value] pairs back to a Map
-        if (data.categorizationHistory) {
-          categorizationHistory = new Map(data.categorizationHistory);
-        }
-        
-        return true;
-      } catch (error) {
-        console.error('Error loading metadata:', error);
-        dialog.showErrorBox('Metadata Error', 'Failed to load previous session data. Starting fresh.');
-        return false;
-      }
-    }
-  } catch (error) {
-    console.error('Error accessing metadata path:', error);
-    return false;
-  }
-  return false;
-}
-
-// Save metadata to file
-function saveMetadata() {
-  try {
-    const metadataDir = path.join(sourceFolder, PROJECT_DIRNAME);
-    if (!fs.existsSync(metadataDir)) {
-      try { fs.mkdirSync(metadataDir, { recursive: true }); } catch (_e) {}
-    }
-    const metadataPath = path.join(metadataDir, METADATA_FILE);
-    const data = {
-      currentIndex: currentPhotoIndex,
-      // Convert Map to array of [key, value] pairs for JSON serialization
-      categorizationHistory: Array.from(categorizationHistory.entries()),
-      lastUpdated: new Date().toISOString()
-    };
-    
-    // Write to temp file first, then rename (atomic operation)
-    const tempPath = metadataPath + '.tmp';
-    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
-    fs.renameSync(tempPath, metadataPath);
-  } catch (error) {
-    console.error('Error saving metadata:', error);
-    // Don't show error dialog for metadata saves to avoid annoying the user
-  }
-}
 
 // Create the main window
 function createWindow() {
@@ -170,9 +110,6 @@ ipcMain.handle('select-source-folder', async () => {
         // Non-fatal
       }
 
-      // Try to load existing metadata
-      const hasMetadata = loadMetadata();
-      
       // Ensure currentPhotoIndex is valid
       if (currentPhotoIndex >= photos.length) {
         currentPhotoIndex = 0;
@@ -182,7 +119,6 @@ ipcMain.handle('select-source-folder', async () => {
         sourceFolder,
         totalPhotos: photos.length,
         firstPhoto: photos.length > 0 ? photos[currentPhotoIndex] : null,
-        hasMetadata,
         currentIndex: currentPhotoIndex,
         stats: statsManager ? statsManager.getStats() : null
       };
@@ -202,9 +138,6 @@ ipcMain.handle('get-next-photo', () => {
   currentPhotoIndex = (currentPhotoIndex + 1) % photos.length;
   const currentPhoto = photos[currentPhotoIndex];
   
-  // Save metadata after navigation
-  saveMetadata();
-  
   return {
     photo: currentPhoto,
     index: currentPhotoIndex,
@@ -220,9 +153,6 @@ ipcMain.handle('get-prev-photo', () => {
   
   currentPhotoIndex = (currentPhotoIndex - 1 + photos.length) % photos.length;
   const currentPhoto = photos[currentPhotoIndex];
-  
-  // Save metadata after navigation
-  saveMetadata();
   
   return {
     photo: currentPhoto,
@@ -296,9 +226,6 @@ ipcMain.handle('categorize-photo', (event, category) => {
     // Move to next photo
     currentPhotoIndex = (currentPhotoIndex + 1) % photos.length;
     const nextPhoto = photos[currentPhotoIndex];
-    
-    // Save metadata after categorization
-    saveMetadata();
     
     return {
       photo: nextPhoto,
@@ -602,12 +529,7 @@ ipcMain.handle('revert-export', () => {
     // Delete JSON files
     const projectDir = path.join(sourceFolder, PROJECT_DIRNAME);
     tryUnlink(path.join(projectDir, 'project.json'));
-    tryUnlink(path.join(projectDir, 'photo_sorter_stats.json'));
-    tryUnlink(path.join(projectDir, 'photo_sorter_metadata.json'));
     tryRmDirRecursive(projectDir);
-    // Legacy cleanup (old root-level files)
-    tryUnlink(path.join(sourceFolder, 'photo_sorter_stats.json'));
-    tryUnlink(path.join(sourceFolder, 'photo_sorter_metadata.json'));
 
     return { ok: true, restored, removed };
   } catch (e) {
