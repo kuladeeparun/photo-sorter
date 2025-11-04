@@ -32,23 +32,6 @@
       font-weight: 500;
     }
     
-    .stats {
-      font-size: 14px;
-      color: #666;
-      display: flex;
-      gap: 20px;
-    }
-    
-    .stat-group {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    
-    .stat-value {
-      font-weight: bold;
-      color: #333;
-    }
     
     .setup-container {
       padding: 50px;
@@ -241,32 +224,6 @@
 <body>
   <div class="header">
     <div class="title">Wedding Photo Sorter</div>
-    <div class="stats" id="stats">
-      <div class="stat-group">
-        <span>Total Photos</span>
-        <span class="stat-value" id="total-photos">0</span>
-      </div>
-      <div class="stat-group">
-        <span>Sorted</span>
-        <span class="stat-value" id="sorted-photos">0</span>
-      </div>
-      <div class="stat-group">
-        <span>Remaining</span>
-        <span class="stat-value" id="remaining-photos">0</span>
-      </div>
-      <div class="stat-group">
-        <span>Yes</span>
-        <span class="stat-value" id="yes-count">0</span>
-      </div>
-      <div class="stat-group">
-        <span>No</span>
-        <span class="stat-value" id="no-count">0</span>
-      </div>
-      <div class="stat-group">
-        <span>Maybe</span>
-        <span class="stat-value" id="maybe-count">0</span>
-      </div>
-    </div>
     <div>
       <button id="toggle-review">Review</button>
       <button id="export-btn" style="margin-left: 10px; background-color: #10a37f;">Export</button>
@@ -323,7 +280,6 @@
     const photoContainer = document.getElementById('photo-container');
     const controls = document.getElementById('controls');
     const photoView = document.getElementById('photo-view');
-    const stats = document.getElementById('stats');
     const sourcePath = document.getElementById('source-path');
     const selectSourceBtn = document.getElementById('select-source');
     const tagInput = document.getElementById('tag-input');
@@ -342,7 +298,6 @@
       const result = await ipcRenderer.invoke('select-source-folder');
       if (result) {
         sourcePath.textContent = result.sourceFolder;
-        stats.textContent = `Total Photos: ${result.totalPhotos}`;
         
         // Show resume message if there's existing metadata
         const resumeMessage = document.getElementById('resume-message');
@@ -355,12 +310,11 @@
         photoContainer.classList.remove('hidden');
         controls.classList.remove('hidden');
         
-        // Load the first photo with stats
+        // Load the first photo
         const photoData = {
           photo: result.firstPhoto,
           index: result.currentIndex || 0,  // Fixed: use currentIndex from result
-          total: result.totalPhotos,
-          stats: result.stats
+          total: result.totalPhotos
         };
         loadPhoto(photoData);
       }
@@ -420,7 +374,6 @@
       
       currentPhotoPath = photoData.photo;
       photoView.src = `file://${photoData.photo}`;
-      stats.textContent = `Photo ${photoData.index + 1} of ${photoData.total}`;
       
       // Update category label
       const categoryLabel = document.getElementById('category-label');
@@ -429,25 +382,6 @@
         categoryLabel.className = `category-label ${photoData.category} visible`;
       } else {
         categoryLabel.className = 'category-label';
-      }
-
-      // Update stats
-      if (photoData.stats) {
-        document.getElementById('total-photos').textContent = photoData.stats.total || 0;
-        document.getElementById('sorted-photos').textContent = photoData.stats.categorizedTotal || 0;
-        document.getElementById('remaining-photos').textContent = photoData.stats.remaining || 0;
-        document.getElementById('yes-count').textContent = photoData.stats.categorized?.yes || 0;
-        document.getElementById('no-count').textContent = photoData.stats.categorized?.no || 0;
-        document.getElementById('maybe-count').textContent = photoData.stats.categorized?.maybe || 0;
-
-        // Show duplicate warning if any duplicates found
-        const duplicateWarning = document.getElementById('duplicate-warning');
-        if (photoData.stats.duplicates && photoData.stats.duplicates.length > 0) {
-          duplicateWarning.classList.add('visible');
-          console.log('Duplicate photos found:', photoData.stats.duplicates);
-        } else {
-          duplicateWarning.classList.remove('visible');
-        }
       }
 
       // Load tags for the current photo and all-known tags for autocomplete
